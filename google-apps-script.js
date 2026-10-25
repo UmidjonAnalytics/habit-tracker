@@ -1,20 +1,44 @@
 /**
  * =========================================================================
- * HABIT TRACKER - GOOGLE APPS SCRIPT BACKEND
+ * HABIT TRACKER - GOOGLE APPS SCRIPT BACKEND (AUTO-SETUP)
  * =========================================================================
- * Ushbu kodni Google Sheets -> Kengaytmalar (Extensions) -> Apps Script
- * bo'limiga nusxalang va "Web App" sifatida deploy qiling.
+ * Ushbu skript mustaqil ishlaydi: agar jadval mavjud bo'lmasa,
+ * o'zi Google Drive'da yangi "Mening Odatlarim" jadvalini ochadi!
  */
 
-// Jadval varaqalari nomlari
 var HABITS_SHEET_NAME = "Habits";
 var LOGS_SHEET_NAME = "Logs";
+
+/**
+ * Jadvalni olish yoki avtomatik yangi yaratish
+ */
+function getSpreadsheet() {
+  // 1. Agar jadval ichida (container-bound) ishlayotgan bo'lsa:
+  try {
+    var active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) return active;
+  } catch (e) {}
+
+  // 2. Agar alohida skript bo'lsa, xotiradan qidirish:
+  var props = PropertiesService.getScriptProperties();
+  var sheetId = props.getProperty("SHEET_ID");
+  if (sheetId) {
+    try {
+      return SpreadsheetApp.openById(sheetId);
+    } catch (e) {}
+  }
+
+  // 3. Yangi jadval ochish va ID sini saqlash
+  var newSheet = SpreadsheetApp.create("Mening Odatlarim (Habit Tracker)");
+  props.setProperty("SHEET_ID", newSheet.getId());
+  return newSheet;
+}
 
 /**
  * Dastlabki varaqlarni avtomatik yaratish va sarlavhalarni qo'yish
  */
 function setupSheets() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSpreadsheet();
   
   // 1. Habits jadvali
   var habitsSheet = ss.getSheetByName(HABITS_SHEET_NAME);
@@ -40,35 +64,41 @@ function setupSheets() {
     logsSheet.getRange(1, 1, 1, 7).setFontWeight("bold").setBackground("#dcfce7");
     logsSheet.setFrozenRows(1);
   }
+
+  // Standart Sheet1 bo'sh qolgan bo'lsa uni olib tashlash (optional)
+  var sheet1 = ss.getSheetByName("Sheet1") || ss.getSheetByName("Лист1");
+  if (sheet1 && ss.getSheets().length > 1) {
+    try { ss.deleteSheet(sheet1); } catch (e) {}
+  }
 }
 
 /**
- * GET so'rovlarni qabul qilish (Ma'lumotlarni o'qish)
+ * GET so'rovlarni qabul qilish
  */
 function doGet(e) {
   try {
     setupSheets();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var habitsSheet = ss.getSheetByName(HABITS_SHEET_NAME);
     var logsSheet = ss.getSheetByName(LOGS_SHEET_NAME);
     
     var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "get_all";
     
     if (action === "ping") {
-      return responseJSON({ status: "success", message: "Google Sheets aloqasi muvaffaqiyatli!" });
+      return responseJSON({ 
+        status: "success", 
+        message: "Google Sheets aloqasi muvaffaqiyatli!",
+        sheetUrl: ss.getUrl()
+      });
     }
     
-    // Odatlar ro'yxatini olish
     var habits = getHabitsData(habitsSheet);
-    
-    // Oxirgi 60 kunlik qaydlarni olish
     var logs = getLogsData(logsSheet);
-    
-    // Hisob-kitoblar (Streaks, Completion rates)
     var stats = calculateStats(habits, logs);
     
     return responseJSON({
       status: "success",
+      sheetUrl: ss.getUrl(),
       habits: habits,
       logs: logs,
       stats: stats,
@@ -80,12 +110,12 @@ function doGet(e) {
 }
 
 /**
- * POST so'rovlarni qabul qilish (Qayd kiritish, yangi odat qo'shish)
+ * POST so'rovlarni qabul qilish
  */
 function doPost(e) {
   try {
     setupSheets();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     
     var data = {};
     if (e && e.postData && e.postData.contents) {
@@ -97,15 +127,12 @@ function doPost(e) {
     var action = data.action;
     
     if (action === "log_habit") {
-      // Bitta odatni belgilash yoki qiymatini yangilash
       var result = saveHabitLog(ss, data);
       return responseJSON({ status: "success", result: result });
     } else if (action === "add_habit") {
-      // Yangi odat qo'shish
       var newHabit = addHabit(ss, data.habit);
       return responseJSON({ status: "success", habit: newHabit });
     } else if (action === "batch_sync") {
-      // Ofline to'plangan bir nechta qaydlarni birdaniga sinxronlash
       if (Array.isArray(data.logs)) {
         data.logs.forEach(function(item) {
           saveHabitLog(ss, item);
@@ -120,9 +147,6 @@ function doPost(e) {
   }
 }
 
-/**
- * Odatlar ro'yxatini jadvaldan o'qish
- */
 function getHabitsData(sheet) {
   var rows = sheet.getDataRange().getValues();
   if (rows.length <= 1) return [];
@@ -130,7 +154,7 @@ function getHabitsData(sheet) {
   var habits = [];
   for (var i = 1; i < rows.length; i++) {
     var row = rows[i];
-    if (row[0] && row[7] !== false && row[7] !== "FALSE") { // Active
+    if (row[0] && row[7] !== false && row[7] !== "FALSE") {
       habits.push({
         id: String(row[0]),
         name: String(row[1]),
@@ -147,16 +171,11 @@ function getHabitsData(sheet) {
   return habits;
 }
 
-/**
- * Qaydlarni jadvaldan o'qish
- */
 function getLogsData(sheet) {
   var rows = sheet.getDataRange().getValues();
   if (rows.length <= 1) return {};
   
-  // Format: { "YYYY-MM-DD": { "habit_id": { value: 1, status: "completed" } } }
   var logsByDate = {};
-  
   for (var i = 1; i < rows.length; i++) {
     var row = rows[i];
     var rawDate = row[0];
@@ -182,14 +201,9 @@ function getLogsData(sheet) {
   return logsByDate;
 }
 
-/**
- * Habit logini saqlash / yangilash
- */
 function saveHabitLog(ss, data) {
   var logsSheet = ss.getSheetByName(LOGS_SHEET_NAME);
-  var habitsSheet = ss.getSheetByName(HABITS_SHEET_NAME);
-  
-  var dateStr = data.date; // "YYYY-MM-DD"
+  var dateStr = data.date;
   var habitId = String(data.habitId);
   var value = Number(data.value);
   var habitName = data.habitName || "";
@@ -211,29 +225,24 @@ function saveHabitLog(ss, data) {
     var rDate = formatDateKey(rows[i][0]);
     var rHabitId = String(rows[i][1]);
     if (rDate === dateStr && rHabitId === habitId) {
-      foundRowIndex = i + 1; // 1-indexed for sheet
+      foundRowIndex = i + 1;
       break;
     }
   }
   
   var now = new Date();
   if (foundRowIndex > 0) {
-    // Mavjud qatorni yangilash
     logsSheet.getRange(foundRowIndex, 4).setValue(value);
     logsSheet.getRange(foundRowIndex, 5).setValue(target);
     logsSheet.getRange(foundRowIndex, 6).setValue(status);
     logsSheet.getRange(foundRowIndex, 7).setValue(now);
   } else {
-    // Yangi qator qo'shish
     logsSheet.appendRow([dateStr, habitId, habitName, value, target, status, now]);
   }
   
   return { date: dateStr, habitId: habitId, value: value, status: status };
 }
 
-/**
- * Yangi odat qo'shish
- */
 function addHabit(ss, habit) {
   var sheet = ss.getSheetByName(HABITS_SHEET_NAME);
   var id = "h_" + Utilities.getUuid().substring(0, 8);
@@ -260,9 +269,6 @@ function addHabit(ss, habit) {
   };
 }
 
-/**
- * Statistikalarni (Streak, Foizlar) hisoblash
- */
 function calculateStats(habits, logsByDate) {
   var streaks = {};
   var totalDays = Object.keys(logsByDate).length;
@@ -270,12 +276,8 @@ function calculateStats(habits, logsByDate) {
   
   habits.forEach(function(h) {
     var currentStreak = 0;
-    var maxStreak = 0;
     var completedCount = 0;
     
-    // Oxirgi 60 kun bo'yicha ketma-ketlikni tekshirish
-    var checkDate = new Date();
-    // Agar bugun hali bajarilmagan bo'lsa, kechadan tekshirishni boshlaymiz
     var todayLog = logsByDate[todayStr] && logsByDate[todayStr][h.id];
     var isTodayDone = todayLog && todayLog.status === "completed";
     
@@ -297,7 +299,6 @@ function calculateStats(habits, logsByDate) {
       }
     }
     
-    // Jami bajarilgan kunlar soni
     Object.keys(logsByDate).forEach(function(k) {
       var l = logsByDate[k][h.id];
       if (l && l.status === "completed") {
@@ -318,9 +319,6 @@ function calculateStats(habits, logsByDate) {
   };
 }
 
-/**
- * Sanani YYYY-MM-DD ko'rinishiga keltirish
- */
 function formatDateKey(d) {
   if (typeof d === "string" && d.length === 10 && d.indexOf("-") === 4) {
     return d;
@@ -332,9 +330,6 @@ function formatDateKey(d) {
   return year + "-" + month + "-" + day;
 }
 
-/**
- * JSON javob qaytarish (CORS qo'llab-quvvatlaydi)
- */
 function responseJSON(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
