@@ -697,7 +697,10 @@ async function syncWithSheets(isManual = true) {
     
     if (data.status === 'success') {
       if (data.habits && data.habits.length > 0) {
-        state.habits = data.habits;
+        // Merge server habits with any locally created habits
+        const serverIds = new Set(data.habits.map(h => h.id));
+        const localOnly = state.habits.filter(h => !serverIds.has(h.id));
+        state.habits = [...data.habits, ...localOnly];
       }
       if (data.logs) {
         state.logs = Object.assign({}, state.logs, data.logs);
@@ -832,6 +835,14 @@ function setupEventListeners() {
       state.habits[existingIndex] = Object.assign({}, state.habits[existingIndex], habitObj);
     } else {
       state.habits.push(habitObj);
+      if (state.sheetsUrl) {
+        fetch(state.sheetsUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'add_habit', habit: habitObj })
+        }).catch(err => console.warn('Add habit sync error:', err));
+      }
     }
     
     saveToStorage();
@@ -871,7 +882,7 @@ function setupEventListeners() {
   elements.btnTestConnection.addEventListener('click', async () => {
     const url = elements.inputSheetsUrl.value.trim();
     if (!url) {
-      showToast('URL bo\'sh bo\'lishi mumkin emas', '⚠️');
+      showToast("URL bo'sh bo'lishi mumkin emas", '⚠️');
       return;
     }
     elements.connectionTestResult.className = 'text-xs text-indigo-400 block';
@@ -881,13 +892,13 @@ function setupEventListeners() {
       const data = await res.json();
       if (data.status === 'success') {
         elements.connectionTestResult.className = 'text-xs text-emerald-400 block';
-        elements.connectionTestResult.textContent = '✓ Aloqa a\'lo darajada! Google Sheets muvaffaqiyatli ulandi.';
+        elements.connectionTestResult.textContent = "✓ Aloqa a'lo darajada! Google Sheets muvaffaqiyatli ulandi.";
       } else {
-        throw new Error('Noma\'lum javob');
+        throw new Error("Noma'lum javob");
       }
     } catch (err) {
       elements.connectionTestResult.className = 'text-xs text-rose-400 block';
-      elements.connectionTestResult.textContent = '✗ Ulanishda xato. URL to\'g'ri deploy qilinganini tekshiring.';
+      elements.connectionTestResult.textContent = "✗ Ulanishda xato. URL to'g'ri deploy qilinganini tekshiring.";
     }
   });
   
@@ -1010,8 +1021,11 @@ function showToast(msg, icon = '✅') {
 
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js')
-      .then(() => console.log('PWA Service Worker faol'))
+    navigator.serviceWorker.register('./sw.js?v=2')
+      .then((reg) => {
+        reg.update();
+        console.log('PWA Service Worker faol');
+      })
       .catch((err) => console.log('SW xatosi:', err));
   }
 }

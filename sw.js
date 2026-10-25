@@ -1,8 +1,8 @@
-const CACHE_NAME = 'habit-tracker-v1';
+const CACHE_NAME = 'habit-tracker-v2';
 const ASSETS = [
   './',
   './index.html',
-  './app.js',
+  './app.js?v=2',
   './manifest.json',
   './icons/icon-192.svg'
 ];
@@ -30,14 +30,18 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Faqat GET so'rovlarni va local fayllarni keshdan qidirish
   if (e.request.method !== 'GET' || e.request.url.includes('script.google.com')) {
     return;
   }
-  
+
+  // Network-first strategy: always get latest version when online, fallback to cache offline
   e.respondWith(
-    caches.match(e.request).then((cached) => {
-      return cached || fetch(e.request).catch(() => cached);
-    })
+    fetch(e.request)
+      .then((res) => {
+        const resClone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(e.request, resClone));
+        return res;
+      })
+      .catch(() => caches.match(e.request))
   );
 });
